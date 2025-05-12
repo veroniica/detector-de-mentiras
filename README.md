@@ -42,6 +42,8 @@ make deploy
 
 ## Desarrollo
 
+### Usando Make
+
 ```bash
 # Instalar dependencias de desarrollo
 make dev
@@ -52,3 +54,20 @@ make test
 # Validar formato de código
 make lint
 ```
+
+### Usando Devfile
+
+Este proyecto incluye un devfile para facilitar el desarrollo en entornos compatibles con OpenShift Dev Spaces o Eclipse Che.
+
+```bash
+# Instalar dependencias
+devfile install
+
+# Construir el proyecto
+devfile build
+
+# Ejecutar pruebas
+devfile test
+```
+
+El devfile utiliza la imagen universal `public.ecr.aws/aws-mde/universal-image:latest` que proporciona todas las herramientas necesarias para el desarrollo.

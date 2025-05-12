@@ -1,0 +1,21 @@
+schemaVersion: 2.0.0
+components:
+  - name: dev
+    container:
+      image: public.ecr.aws/aws-mde/universal-image:latest
+
+commands:
+  - id: install
+    exec:
+      component: dev
+      commandLine: "pip install -r requirements.txt --user && pip install pytest pytest-cov pylint --user"
+
+  - id: build
+    exec:
+      component: dev
+      commandLine: "mkdir -p dist && cd src/lambda && zip -r ../../dist/audio_processor.zip audio_processor.py && zip -r ../../dist/transcription.zip transcription.py && zip -r ../../dist/sentiment_analysis.zip sentiment_analysis.py && zip -r ../../dist/summary_generator.zip summary_generator.py && zip -r ../../dist/inconsistency_detector.zip inconsistency_detector.py"
+
+  - id: test
+    exec:
+      component: dev
+      commandLine: "python -m pytest tests/ -v && python -m pylint src/"
