@@ -1,0 +1,624 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation template for Audio Interview Analysis System'
+
+Parameters:
+  EnvironmentName:
+    Description: Environment name - dev, test, or prod
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - test
+      - prod
+  
+  S3BucketName:
+    Description: Name of the S3 bucket for storing audio files and results
+    Type: String
+    Default: audio-interview-analysis-bucket
+  
+  ECRRepositoryName:
+    Description: Name of the ECR repository for the Docker image
+    Type: String
+    Default: audio-interview-analysis
+  
+  BatchJobQueueName:
+    Description: Name of the AWS Batch job queue
+    Type: String
+    Default: audio-analysis-job-queue
+  
+  BatchJobDefinitionName:
+    Description: Name of the AWS Batch job definition
+    Type: String
+    Default: audio-analysis-job-definition
+  
+  LambdaFunctionName:
+    Description: Name of the Lambda function for triggering batch jobs
+    Type: String
+    Default: audio-analysis-trigger
+  
+  VpcCIDR:
+    Description: CIDR block for the VPC
+    Type: String
+    Default: 10.0.0.0/16
+  
+  PublicSubnet1CIDR:
+    Description: CIDR block for the public subnet 1
+    Type: String
+    Default: 10.0.1.0/24
+  
+  PublicSubnet2CIDR:
+    Description: CIDR block for the public subnet 2
+    Type: String
+    Default: 10.0.2.0/24
+  
+  PrivateSubnet1CIDR:
+    Description: CIDR block for the private subnet 1
+    Type: String
+    Default: 10.0.3.0/24
+  
+  PrivateSubnet2CIDR:
+    Description: CIDR block for the private subnet 2
+    Type: String
+    Default: 10.0.4.0/24
+  
+  HuggingFaceToken:
+    Description: HuggingFace API token for accessing models
+    Type: String
+    NoEcho: true
+
+Resources:
+  # VPC and Networking
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-VPC
+  
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-IGW
+  
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+  
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Ref PublicSubnet1CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-PublicSubnet1
+  
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: !Ref PublicSubnet2CIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-PublicSubnet2
+  
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Ref PrivateSubnet1CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-PrivateSubnet1
+  
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: !Ref PrivateSubnet2CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-PrivateSubnet2
+  
+  NatGateway1EIP:
+    Type: AWS::EC2::EIP
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Domain: vpc
+  
+  NatGateway2EIP:
+    Type: AWS::EC2::EIP
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Domain: vpc
+  
+  NatGateway1:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGateway1EIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+  
+  NatGateway2:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatGateway2EIP.AllocationId
+      SubnetId: !Ref PublicSubnet2
+  
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-PublicRoutes
+  
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+  
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+      
+  PrivateRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-PrivateRoutes1
+  
+  DefaultPrivateRoute1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway1
+  
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable1
+      SubnetId: !Ref PrivateSubnet1
+  
+  PrivateRouteTable2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-PrivateRoutes2
+  
+  DefaultPrivateRoute2:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway2
+  
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable2
+      SubnetId: !Ref PrivateSubnet2
+      
+  # S3 Bucket for Audio Files and Results
+  AudioAnalysisBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref S3BucketName
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - '*'
+            AllowedMethods:
+              - GET
+              - PUT
+              - POST
+              - DELETE
+              - HEAD
+            AllowedOrigins:
+              - '*'
+            MaxAge: 3000
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-AudioAnalysisBucket
+  
+  # S3 Bucket Policy
+  AudioAnalysisBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AudioAnalysisBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: batch.amazonaws.com
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:ListBucket
+            Resource:
+              - !Sub arn:aws:s3:::${AudioAnalysisBucket}
+              - !Sub arn:aws:s3:::${AudioAnalysisBucket}/*
+  
+  # ECR Repository for Docker Image
+  AudioAnalysisRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref ECRRepositoryName
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep only the last 10 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 10
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-AudioAnalysisRepository
+  
+  # IAM Roles
+  BatchServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: batch.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSBatchServiceRole
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-BatchServiceRole
+  
+  BatchInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-BatchInstanceRole
+  
+  BatchInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref BatchInstanceRole
+  
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
+        - arn:aws:iam::aws:policy/AWSBatchFullAccess
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-LambdaExecutionRole
+  
+  # Batch Compute Environment
+  BatchComputeEnvironment:
+    Type: AWS::Batch::ComputeEnvironment
+    Properties:
+      Type: MANAGED
+      ServiceRole: !GetAtt BatchServiceRole.Arn
+      ComputeResources:
+        Type: EC2
+        MinvCpus: 0
+        MaxvCpus: 16
+        DesiredvCpus: 0
+        InstanceTypes:
+          - g4dn.xlarge  # GPU instance for ML workloads
+          - c5.2xlarge   # Fallback to CPU if GPU not available
+        Subnets:
+          - !Ref PrivateSubnet1
+          - !Ref PrivateSubnet2
+        SecurityGroupIds:
+          - !GetAtt BatchSecurityGroup.GroupId
+        InstanceRole: !GetAtt BatchInstanceProfile.Arn
+        Tags:
+          Name: !Sub ${EnvironmentName}-BatchCompute
+      State: ENABLED
+  
+  # Batch Security Group
+  BatchSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for AWS Batch compute environment
+      VpcId: !Ref VPC
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-BatchSecurityGroup
+  
+  # Batch Job Queue
+  BatchJobQueue:
+    Type: AWS::Batch::JobQueue
+    Properties:
+      JobQueueName: !Ref BatchJobQueueName
+      Priority: 1
+      ComputeEnvironmentOrder:
+        - Order: 1
+          ComputeEnvironment: !Ref BatchComputeEnvironment
+      State: ENABLED
+  
+  # Batch Job Definition
+  BatchJobDefinition:
+    Type: AWS::Batch::JobDefinition
+    Properties:
+      JobDefinitionName: !Ref BatchJobDefinitionName
+      Type: container
+      ContainerProperties:
+        Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${AudioAnalysisRepository}:latest
+        Vcpus: 4
+        Memory: 16384
+        Command:
+          - python
+          - -m
+          - audio_analysis.main
+          - --input_dir
+          - /data/input
+          - --output_dir
+          - /data/output
+        Environment:
+          - Name: HF_TOKEN
+            Value: !Ref HuggingFaceToken
+        MountPoints:
+          - ContainerPath: /data
+            ReadOnly: false
+            SourceVolume: data
+        Volumes:
+          - Name: data
+            Host:
+              SourcePath: /tmp/data
+        ResourceRequirements:
+          - Type: GPU
+            Value: "1"
+      RetryStrategy:
+        Attempts: 2
+      Timeout:
+        AttemptDurationSeconds: 14400  # 4 hours
+  
+  # Lambda Function for S3 Event Processing
+  AudioAnalysisLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref LambdaFunctionName
+      Handler: index.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.9
+      Timeout: 60
+      MemorySize: 256
+      Environment:
+        Variables:
+          JOB_QUEUE: !Ref BatchJobQueue
+          JOB_DEFINITION: !Ref BatchJobDefinition
+          S3_BUCKET: !Ref AudioAnalysisBucket
+      Code:
+        ZipFile: |
+          import json
+          import os
+          import boto3
+          import uuid
+          
+          batch = boto3.client('batch')
+          s3 = boto3.client('s3')
+          
+          def handler(event, context):
+              # Get the S3 bucket and key from the event
+              bucket = event['Records'][0]['s3']['bucket']['name']
+              key = event['Records'][0]['s3']['object']['key']
+              
+              # Only process audio files
+              if not key.lower().endswith(('.wav', '.mp3', '.m4a', '.flac')):
+                  print(f"Skipping non-audio file: {key}")
+                  return
+              
+              # Generate a unique job name
+              job_name = f"audio-analysis-{uuid.uuid4()}"
+              
+              # Submit a Batch job
+              response = batch.submit_job(
+                  jobName=job_name,
+                  jobQueue=os.environ['JOB_QUEUE'],
+                  jobDefinition=os.environ['JOB_DEFINITION'],
+                  containerOverrides={
+                      'environment': [
+                          {
+                              'name': 'S3_INPUT_KEY',
+                              'value': key
+                          },
+                          {
+                              'name': 'S3_BUCKET',
+                              'value': bucket
+                          }
+                      ]
+                  }
+              )
+              
+              print(f"Submitted job {response['jobName']} with ID {response['jobId']}")
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps(f"Job submitted: {response['jobId']}")
+              }
+  
+  # S3 Event Notification for Audio File Uploads
+  S3EventNotification:
+    Type: AWS::S3::BucketNotification
+    Properties:
+      Bucket: !Ref AudioAnalysisBucket
+      LambdaConfigurations:
+        - Event: s3:ObjectCreated:*
+          Filter:
+            S3Key:
+              Rules:
+                - Name: prefix
+                  Value: input/
+          Function: !GetAtt AudioAnalysisLambda.Arn
+  
+  # Lambda Permission for S3
+  LambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref AudioAnalysisLambda
+      Principal: s3.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+      SourceArn: !Sub arn:aws:s3:::${AudioAnalysisBucket}
+
+Outputs:
+  VpcId:
+    Description: The ID of the VPC
+    Value: !Ref VPC
+    Export:
+      Name: !Sub ${EnvironmentName}-VpcId
+  
+  PublicSubnet1:
+    Description: The ID of the public subnet 1
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: !Sub ${EnvironmentName}-PublicSubnet1
+  
+  PublicSubnet2:
+    Description: The ID of the public subnet 2
+    Value: !Ref PublicSubnet2
+    Export:
+      Name: !Sub ${EnvironmentName}-PublicSubnet2
+  
+  PrivateSubnet1:
+    Description: The ID of the private subnet 1
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: !Sub ${EnvironmentName}-PrivateSubnet1
+  
+  PrivateSubnet2:
+    Description: The ID of the private subnet 2
+    Value: !Ref PrivateSubnet2
+    Export:
+      Name: !Sub ${EnvironmentName}-PrivateSubnet2
+  
+  S3BucketName:
+    Description: The name of the S3 bucket for audio files and results
+    Value: !Ref AudioAnalysisBucket
+    Export:
+      Name: !Sub ${EnvironmentName}-S3BucketName
+  
+  S3BucketArn:
+    Description: The ARN of the S3 bucket
+    Value: !GetAtt AudioAnalysisBucket.Arn
+    Export:
+      Name: !Sub ${EnvironmentName}-S3BucketArn
+  
+  ECRRepositoryUrl:
+    Description: The URL of the ECR repository
+    Value: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${AudioAnalysisRepository}
+    Export:
+      Name: !Sub ${EnvironmentName}-ECRRepositoryUrl
+  
+  BatchJobQueueArn:
+    Description: The ARN of the Batch job queue
+    Value: !GetAtt BatchJobQueue.JobQueueArn
+    Export:
+      Name: !Sub ${EnvironmentName}-BatchJobQueueArn
+  
+  BatchJobDefinitionArn:
+    Description: The ARN of the Batch job definition
+    Value: !GetAtt BatchJobDefinition.JobDefinitionArn
+    Export:
+      Name: !Sub ${EnvironmentName}-BatchJobDefinitionArn
+  
+  LambdaFunctionArn:
+    Description: The ARN of the Lambda function
+    Value: !GetAtt AudioAnalysisLambda.Arn
+    Export:
+      Name: !Sub ${EnvironmentName}-LambdaFunctionArn
+  
+  Instructions:
+    Description: Instructions for using the Audio Interview Analysis System
+    Value: !Sub |
+      Audio Interview Analysis System is now deployed!
+      
+      To use the system:
+      
+      1. Build and push the Docker image to ECR:
+         aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
+         docker build -t ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${AudioAnalysisRepository}:latest .
+         docker push ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${AudioAnalysisRepository}:latest
+      
+      2. Upload audio files to the S3 bucket:
+         aws s3 cp your-audio-file.mp3 s3://${AudioAnalysisBucket}/input/
+      
+      3. The system will automatically process the audio files and store results in:
+         s3://${AudioAnalysisBucket}/output/
+      
+      4. Monitor job status:
+         aws batch list-jobs --job-queue ${BatchJobQueueName}
