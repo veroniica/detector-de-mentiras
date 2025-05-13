@@ -1,28 +1,29 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: 'Serverless architecture for forensic audio analysis using AWS AI services'
+Transform: AWS::Serverless-2016-10-31
 
-Parameters:
-  ProjectName:
-    Type: String
-    Default: forensic-audio-analysis
-    Description: Name of the project used for resource naming
 
-  AudioBucketName:
-    Type: String
-    Description: Name of the S3 bucket for audio files
-    Default: forensic-audio-files
+# Parameters:
+#   ProjectName:
+#     Type: String
+#     Default: forensic-audio-analysis
+#     Description: Name of the project used for resource naming
 
-  ResultsBucketName:
-    Type: String
-    Description: Name of the S3 bucket for results
-    Default: forensic-audio-results
+#   AudioBucketName:
+#     Type: String
+#     Description: Name of the S3 bucket for audio files
+#     Default: forensic-audio-files
+
+#   ResultsBucketName:
+#     Type: String
+#     Description: Name of the S3 bucket for results
+#     Default: forensic-audio-results
 
 Resources:
-  # S3 Buckets
+
   AudioBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub "${AudioBucketName}-${AWS::AccountId}"
       NotificationConfiguration:
         EventBridgeConfiguration:
           EventBridgeEnabled: true
@@ -37,7 +38,6 @@ Resources:
   ResultsBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub "${ResultsBucketName}-${AWS::AccountId}"
       VersioningConfiguration:
         Status: Enabled
 
@@ -45,7 +45,6 @@ Resources:
   AudioMetadataTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: !Sub "${ProjectName}-audio-metadata"
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: audioId
@@ -57,7 +56,6 @@ Resources:
   TranscriptionTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: !Sub "${ProjectName}-transcriptions"
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: audioId
@@ -66,19 +64,18 @@ Resources:
         - AttributeName: audioId
           KeyType: HASH
 
-  AnalysisResultsTable:
-    Type: AWS::DynamoDB::Table
-    Properties:
-      TableName: !Sub "${ProjectName}-analysis-results"
-      BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions:
-        - AttributeName: audioId
-          AttributeType: S
-      KeySchema:
-        - AttributeName: audioId
-          KeyType: HASH
+#   AnalysisResultsTable:
+#     Type: AWS::DynamoDB::Table
+#     Properties:
+#       BillingMode: PAY_PER_REQUEST
+#       AttributeDefinitions:
+#         - AttributeName: audioId
+#           AttributeType: S
+#       KeySchema:
+#         - AttributeName: audioId
+#           KeyType: HASH
 
-  # IAM Roles
+#   # IAM Roles
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -120,7 +117,7 @@ Resources:
                 Resource:
                   - !GetAtt AudioMetadataTable.Arn
                   - !GetAtt TranscriptionTable.Arn
-                  - !GetAtt AnalysisResultsTable.Arn
+#                   - !GetAtt AnalysisResultsTable.Arn
         - PolicyName: TranscribeAccess
           PolicyDocument:
             Version: '2012-10-17'
@@ -130,25 +127,25 @@ Resources:
                   - transcribe:StartTranscriptionJob
                   - transcribe:GetTranscriptionJob
                 Resource: '*'
-        - PolicyName: ComprehendAccess
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - comprehend:DetectSentiment
-                  - comprehend:DetectKeyPhrases
-                  - comprehend:BatchDetectSentiment
-                  - comprehend:BatchDetectKeyPhrases
-                Resource: '*'
-        - PolicyName: BedrockAccess
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - bedrock:InvokeModel
-                Resource: '*'
+#         - PolicyName: ComprehendAccess
+#           PolicyDocument:
+#             Version: '2012-10-17'
+#             Statement:
+#               - Effect: Allow
+#                 Action:
+#                   - comprehend:DetectSentiment
+#                   - comprehend:DetectKeyPhrases
+#                   - comprehend:BatchDetectSentiment
+#                   - comprehend:BatchDetectKeyPhrases
+#                 Resource: '*'
+#         - PolicyName: BedrockAccess
+#           PolicyDocument:
+#             Version: '2012-10-17'
+#             Statement:
+#               - Effect: Allow
+#                 Action:
+#                   - bedrock:InvokeModel
+#                 Resource: '*'
         - PolicyName: StepFunctionsAccess
           PolicyDocument:
             Version: '2012-10-17'
@@ -157,7 +154,7 @@ Resources:
                 Action:
                   - states:StartExecution
                   - states:DescribeExecution
-                Resource: !GetAtt AudioProcessingStateMachine.Arn
+                Resource: "*"
 
   StepFunctionsExecutionRole:
     Type: AWS::IAM::Role
@@ -177,38 +174,36 @@ Resources:
               - Effect: Allow
                 Action:
                   - lambda:InvokeFunction
-                Resource: '*'
+                Resource: !GetAtt TranscriptionFunction.Arn
 
   # Lambda Functions
   AudioProcessorFunction:
-    Type: AWS::Lambda::Function
+    Type: AWS::Serverless::Function
     Properties:
-      FunctionName: !Sub "${ProjectName}-audio-processor"
-      Handler: audio_processor.handler
+      CodeUri: ./src/audioprocessor
+      Handler: main.handler
       Role: !GetAtt LambdaExecutionRole.Arn
-      Code:
-        S3Bucket: !Ref ResultsBucket
-        S3Key: lambda/audio_processor.zip
-      Runtime: python3.9
-      Timeout: 60
-      MemorySize: 256
+      Runtime: python3.12
+#       Timeout: 60
+#       MemorySize: 256
       Environment:
         Variables:
-          AUDIO_BUCKET: !Ref AudioBucket
-          RESULTS_BUCKET: !Ref ResultsBucket
+#           AUDIO_BUCKET: !Ref AudioBucket
+#           RESULTS_BUCKET: !Ref ResultsBucket
           METADATA_TABLE: !Ref AudioMetadataTable
           STATE_MACHINE_ARN: !Ref AudioProcessingStateMachine
+  AudioProcessorFunctionLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AudioProcessorFunction}"
+      RetentionInDays: 30
 
   TranscriptionFunction:
-    Type: AWS::Lambda::Function
+    Type: AWS::Serverless::Function
     Properties:
-      FunctionName: !Sub "${ProjectName}-transcription"
-      Handler: transcription.handler
-      Role: !GetAtt LambdaExecutionRole.Arn
-      Code:
-        S3Bucket: !Ref ResultsBucket
-        S3Key: lambda/transcription.zip
-      Runtime: python3.9
+      Handler: main.handler
+      Runtime: python3.12
+      CodeUri: ./src/transcription
       Timeout: 300
       MemorySize: 512
       Environment:
@@ -216,64 +211,70 @@ Resources:
           AUDIO_BUCKET: !Ref AudioBucket
           RESULTS_BUCKET: !Ref ResultsBucket
           TRANSCRIPTION_TABLE: !Ref TranscriptionTable
-
-  SentimentAnalysisFunction:
-    Type: AWS::Lambda::Function
-    Properties:
-      FunctionName: !Sub "${ProjectName}-sentiment-analysis"
-      Handler: sentiment_analysis.handler
       Role: !GetAtt LambdaExecutionRole.Arn
-      Code:
-        S3Bucket: !Ref ResultsBucket
-        S3Key: lambda/sentiment_analysis.zip
-      Runtime: python3.9
-      Timeout: 300
-      MemorySize: 512
-      Environment:
-        Variables:
-          RESULTS_BUCKET: !Ref ResultsBucket
-          ANALYSIS_TABLE: !Ref AnalysisResultsTable
-
-  SummaryGeneratorFunction:
-    Type: AWS::Lambda::Function
+  TranscriptionFunctionLogs:
+    Type: AWS::Logs::LogGroup
     Properties:
-      FunctionName: !Sub "${ProjectName}-summary-generator"
-      Handler: summary_generator.handler
-      Role: !GetAtt LambdaExecutionRole.Arn
-      Code:
-        S3Bucket: !Ref ResultsBucket
-        S3Key: lambda/summary_generator.zip
-      Runtime: python3.9
-      Timeout: 300
-      MemorySize: 512
-      Environment:
-        Variables:
-          RESULTS_BUCKET: !Ref ResultsBucket
-          ANALYSIS_TABLE: !Ref AnalysisResultsTable
+      LogGroupName: !Sub "/aws/lambda/${TranscriptionFunction}"
+      RetentionInDays: 30
 
-  InconsistencyDetectorFunction:
-    Type: AWS::Lambda::Function
-    Properties:
-      FunctionName: !Sub "${ProjectName}-inconsistency-detector"
-      Handler: inconsistency_detector.handler
-      Role: !GetAtt LambdaExecutionRole.Arn
-      Code:
-        S3Bucket: !Ref ResultsBucket
-        S3Key: lambda/inconsistency_detector.zip
-      Runtime: python3.9
-      Timeout: 300
-      MemorySize: 512
-      Environment:
-        Variables:
-          RESULTS_BUCKET: !Ref ResultsBucket
-          TRANSCRIPTION_TABLE: !Ref TranscriptionTable
-          ANALYSIS_TABLE: !Ref AnalysisResultsTable
+
+#   SentimentAnalysisFunction:
+#     Type: AWS::Lambda::Function
+#     Properties:
+#       FunctionName: !Sub "${ProjectName}-sentiment-analysis"
+#       Handler: sentiment_analysis.handler
+#       Role: !GetAtt LambdaExecutionRole.Arn
+#       Code:
+#         S3Bucket: !Ref ResultsBucket
+#         S3Key: lambda/sentiment_analysis.zip
+#       Runtime: python3.9
+#       Timeout: 300
+#       MemorySize: 512
+#       Environment:
+#         Variables:
+#           RESULTS_BUCKET: !Ref ResultsBucket
+#           ANALYSIS_TABLE: !Ref AnalysisResultsTable
+
+#   SummaryGeneratorFunction:
+#     Type: AWS::Lambda::Function
+#     Properties:
+#       FunctionName: !Sub "${ProjectName}-summary-generator"
+#       Handler: summary_generator.handler
+#       Role: !GetAtt LambdaExecutionRole.Arn
+#       Code:
+#         S3Bucket: !Ref ResultsBucket
+#         S3Key: lambda/summary_generator.zip
+#       Runtime: python3.9
+#       Timeout: 300
+#       MemorySize: 512
+#       Environment:
+#         Variables:
+#           RESULTS_BUCKET: !Ref ResultsBucket
+#           ANALYSIS_TABLE: !Ref AnalysisResultsTable
+
+#   InconsistencyDetectorFunction:
+#     Type: AWS::Lambda::Function
+#     Properties:
+#       FunctionName: !Sub "${ProjectName}-inconsistency-detector"
+#       Handler: inconsistency_detector.handler
+#       Role: !GetAtt LambdaExecutionRole.Arn
+#       Code:
+#         S3Bucket: !Ref ResultsBucket
+#         S3Key: lambda/inconsistency_detector.zip
+#       Runtime: python3.9
+#       Timeout: 300
+#       MemorySize: 512
+#       Environment:
+#         Variables:
+#           RESULTS_BUCKET: !Ref ResultsBucket
+#           TRANSCRIPTION_TABLE: !Ref TranscriptionTable
+#           ANALYSIS_TABLE: !Ref AnalysisResultsTable
 
   # EventBridge Rule
   AudioUploadRule:
     Type: AWS::Events::Rule
     Properties:
-      Name: !Sub "${ProjectName}-audio-upload-rule"
       Description: "Rule to trigger processing when audio files are uploaded to S3"
       EventPattern:
         source:
@@ -305,7 +306,6 @@ Resources:
   AudioProcessingStateMachine:
     Type: AWS::StepFunctions::StateMachine
     Properties:
-      StateMachineName: !Sub "${ProjectName}-audio-processing"
       RoleArn: !GetAtt StepFunctionsExecutionRole.Arn
       Definition:
         Comment: "State machine for processing audio files"
@@ -314,36 +314,36 @@ Resources:
           TranscribeAudio:
             Type: Task
             Resource: !GetAtt TranscriptionFunction.Arn
-            Next: Parallel
-          Parallel:
-            Type: Parallel
-            Branches:
-              - StartAt: AnalyzeSentiment
-                States:
-                  AnalyzeSentiment:
-                    Type: Task
-                    Resource: !GetAtt SentimentAnalysisFunction.Arn
-                    End: true
-              - StartAt: GenerateSummary
-                States:
-                  GenerateSummary:
-                    Type: Task
-                    Resource: !GetAtt SummaryGeneratorFunction.Arn
-                    End: true
-            Next: DetectInconsistencies
-          DetectInconsistencies:
-            Type: Task
-            Resource: !GetAtt InconsistencyDetectorFunction.Arn
+#             Next: Parallel
+#           Parallel:
+#             Type: Parallel
+#             Branches:
+#               - StartAt: AnalyzeSentiment
+#                 States:
+#                   AnalyzeSentiment:
+#                     Type: Task
+#                     Resource: !GetAtt SentimentAnalysisFunction.Arn
+#                     End: true
+#               - StartAt: GenerateSummary
+#                 States:
+#                   GenerateSummary:
+#                     Type: Task
+#                     Resource: !GetAtt SummaryGeneratorFunction.Arn
+#                     End: true
+#             Next: DetectInconsistencies
+#           DetectInconsistencies:
+#             Type: Task
+#             Resource: !GetAtt InconsistencyDetectorFunction.Arn
             End: true
 
 Outputs:
-  AudioBucketName:
-    Description: "Name of the S3 bucket for audio files"
-    Value: !Ref AudioBucket
+#   AudioBucketName:
+#     Description: "Name of the S3 bucket for audio files"
+#     Value: !Ref AudioBucket
 
-  ResultsBucketName:
-    Description: "Name of the S3 bucket for results"
-    Value: !Ref ResultsBucket
+#   ResultsBucketName:
+#     Description: "Name of the S3 bucket for results"
+#     Value: !Ref ResultsBucket
 
   StateMachineArn:
     Description: "ARN of the Step Functions state machine"
