@@ -39,6 +39,7 @@ def start_transcription_job(transcribe_client, audio_id, bucket, key):
                 "ShowAlternatives": False,
             },
         )
+        logger.info(f"Transcription job response: {response}")
         return job_name
 
     except Exception as e:

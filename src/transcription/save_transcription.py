@@ -28,7 +28,7 @@ def save_transcription(s3_client, audio_id, script, raw_result):
     """
     try:
         logger.info(
-            f"Saving transcription for {audio_id}: {json.dumps(script, raw_result)}"
+            f"Saving transcription for {audio_id}: {json.dumps({'script':script, 'raw_result':raw_result})}"
         )
         # Save formatted script to S3
         script_key = f"transcriptions/{audio_id}/script.txt"

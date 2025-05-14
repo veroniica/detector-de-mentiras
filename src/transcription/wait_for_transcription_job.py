@@ -1,6 +1,6 @@
 import time
 import logging
-
+import json
 
 # Configure logging
 logger = logging.getLogger()
@@ -23,8 +23,9 @@ def wait_for_transcription_job(transcribe_client, job_name):
             response = transcribe_client.get_transcription_job(
                 TranscriptionJobName=job_name
             )
-
+            print(response)
             status = response["TranscriptionJob"]["TranscriptionJobStatus"]
+            logger.info(f"Transcription job {job_name} status: {status}")
 
             if status in ["COMPLETED", "FAILED"]:
                 return response["TranscriptionJob"]

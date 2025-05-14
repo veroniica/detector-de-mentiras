@@ -9,6 +9,7 @@ import json
 import boto3
 import logging
 import traceback
+import time
 
 from start_transcription_job import start_transcription_job
 from wait_for_transcription_job import wait_for_transcription_job
@@ -50,6 +51,7 @@ def handler(event, context):
         logger.info(f"Transcription job completed: {job_name}")
 
         # Get transcription result
+        time.sleep(5)
         result = get_transcription_result(s3_client, job)
         logger.info(f"Transcription result: {result}")
 
@@ -67,8 +69,9 @@ def handler(event, context):
         }
 
     except Exception as e:
-        logger.error(f"Error processing transcription: {str(e)}")
         error_traceback = traceback.format_exc()
+        logger.error(f"Error processing transcription: {str(e)}")
+        logger.error(f"Error traceback: {error_traceback}")
         raise {
             "audioId": event.get("audioId", "unknown"),
             "error": str(e),

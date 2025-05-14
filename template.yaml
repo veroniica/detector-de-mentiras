@@ -75,7 +75,7 @@ Resources:
 #         - AttributeName: audioId
 #           KeyType: HASH
 
-#   # IAM Roles
+  # IAM Roles
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
