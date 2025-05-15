@@ -1,15 +1,14 @@
-# """
-# Transcription Lambda Function
-# This function uses Amazon Transcribe to convert audio to text with
-# speaker identification.
-# It formats the transcription as a script with timestamps.
-# """
+"""
+Transcription Lambda Function
+This function uses Amazon Transcribe to convert audio to text with
+speaker identification and formats the transcription as a script with timestamps.
+"""
 
 import json
 import boto3
 import logging
+from botocore.exceptions import ClientError
 import traceback
-import time
 
 from start_transcription_job import start_transcription_job
 from wait_for_transcription_job import wait_for_transcription_job
@@ -21,65 +20,72 @@ from save_transcription import save_transcription
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+# Initialize clients once outside the handler for better performance
 s3_client = boto3.client("s3")
 transcribe_client = boto3.client("transcribe")
 
 
 def handler(event, context):
     """
-    Lambda handler function.
+    Lambda handler function that processes audio transcription workflow.
 
     Args:
-        event (dict): Event data
+        event (dict): Event data containing audioId, bucket and key
         context (object): Lambda context
 
     Returns:
-        dict: Response
+        dict: Response with transcription status and details
     """
+    audio_id = event.get("audioId", "unknown")
+
     try:
-        logger.info(f"Begin: {json.dumps(event)}")
-        audio_id = event["audioId"]
+        logger.info(f"Processing transcription request: {json.dumps(event)}")
+
+        # Extract required parameters
         bucket = event["bucket"]
         key = event["key"]
 
-        # Start transcription job
+        # Execute transcription workflow
         job_name = start_transcription_job(transcribe_client, audio_id, bucket, key)
-        logger.info(f"Started transcription job: {job_name}")
-
-        # Wait for job to complete
         job = wait_for_transcription_job(transcribe_client, job_name)
-        logger.info(f"Transcription job completed: {job_name}")
-
-        # Get transcription result
-        time.sleep(5)
         result = get_transcription_result(s3_client, job)
-        logger.info(f"Transcription result: {result}")
-
-        # Format as script
         script = format_as_script(result)
-        logger.info(f"Formatted as script: {script}")
-
-        # Save transcription
         transcription = save_transcription(s3_client, audio_id, script, result)
 
+        logger.info(f"Transcription completed successfully for audio: {audio_id}")
         return {
             "audioId": audio_id,
             "transcription": transcription,
             "status": "COMPLETED",
         }
 
+    except KeyError as e:
+        logger.error(f"Missing required parameter: {str(e)}")
+        return create_error_response(
+            audio_id, e, "INVALID_REQUEST", f"Missing required parameter: {str(e)}"
+        )
+    except ClientError as e:
+        logger.error(f"AWS service error: {str(e)}")
+        return create_error_response(
+            audio_id,
+            e,
+            "SERVICE_ERROR",
+            f"AWS service error: {e.response['Error']['Message']}",
+        )
     except Exception as e:
-        error_traceback = traceback.format_exc()
-        logger.error(f"Error processing transcription: {str(e)}")
-        logger.error(f"Error traceback: {error_traceback}")
-        raise {
-            "audioId": event.get("audioId", "unknown"),
-            "error": str(e),
-            "status": "FAILED",
-            "message": f"Error processing audio: {str(e)}",
-            "error_type": type(e).__name__,
-            "error_details": str(e),
-            "error_traceback": error_traceback,
-            "error_location": str(traceback.extract_tb(e.__traceback__)[-1]),
-        }
+        logger.error(f"Unexpected error: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return create_error_response(
+            audio_id, e, "FAILED", "Error processing audio transcription"
+        )
 
+
+def create_error_response(audio_id, exception, status, message):
+    """Helper function to create standardized error responses"""
+    return {
+        "audioId": audio_id,
+        "error": str(exception),
+        "status": status,
+        "message": message,
+        "error_type": type(exception).__name__,
+    }

@@ -34,11 +34,11 @@ def get_transcription_result(s3_client, job):
         parsed_uri = urlparse(transcript_uri)
         print("parsed_uri")
         print(parsed_uri)
-            
+
         # Extract the bucket name from the path
-        path_parts = parsed_uri.path.lstrip('/').split('/', 1)
+        path_parts = parsed_uri.path.lstrip("/").split("/", 1)
         bucket = path_parts[0]
-        key = path_parts[1] if len(path_parts) > 1 else ''
+        key = path_parts[1] if len(path_parts) > 1 else ""
 
         logger.info(f"Extracted from HTTPS URL - Bucket: {bucket}, Key: {key}")
 
