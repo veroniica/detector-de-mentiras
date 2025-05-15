@@ -64,16 +64,16 @@ Resources:
         - AttributeName: audioId
           KeyType: HASH
 
-#   AnalysisResultsTable:
-#     Type: AWS::DynamoDB::Table
-#     Properties:
-#       BillingMode: PAY_PER_REQUEST
-#       AttributeDefinitions:
-#         - AttributeName: audioId
-#           AttributeType: S
-#       KeySchema:
-#         - AttributeName: audioId
-#           KeyType: HASH
+  AnalysisResultsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: audioId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: audioId
+          KeyType: HASH
 
   # IAM Roles
   LambdaExecutionRole:
@@ -219,57 +219,66 @@ Resources:
       RetentionInDays: 30
 
 
-#   SentimentAnalysisFunction:
-#     Type: AWS::Lambda::Function
-#     Properties:
-#       FunctionName: !Sub "${ProjectName}-sentiment-analysis"
-#       Handler: sentiment_analysis.handler
-#       Role: !GetAtt LambdaExecutionRole.Arn
-#       Code:
-#         S3Bucket: !Ref ResultsBucket
-#         S3Key: lambda/sentiment_analysis.zip
-#       Runtime: python3.9
-#       Timeout: 300
-#       MemorySize: 512
-#       Environment:
-#         Variables:
-#           RESULTS_BUCKET: !Ref ResultsBucket
-#           ANALYSIS_TABLE: !Ref AnalysisResultsTable
+  SentimentAnalysisFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: main.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      CodeUri: ./src/sentimentanalysis
+      Runtime: python3.12
+      Environment:
+        Variables:
+          RESULTS_BUCKET: !Ref ResultsBucket
+          TRANSCRIPTION_TABLE: !Ref TranscriptionTable
+          ANALYSIS_TABLE: !Ref AnalysisResultsTable
+      Environment:
+        Variables:
+          RESULTS_BUCKET: !Ref ResultsBucket
+          ANALYSIS_TABLE: !Ref AnalysisResultsTable
+  SentimentAnalysisFunctionLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${SentimentAnalysisFunction}"
+      RetentionInDays: 30
 
-#   SummaryGeneratorFunction:
-#     Type: AWS::Lambda::Function
-#     Properties:
-#       FunctionName: !Sub "${ProjectName}-summary-generator"
-#       Handler: summary_generator.handler
-#       Role: !GetAtt LambdaExecutionRole.Arn
-#       Code:
-#         S3Bucket: !Ref ResultsBucket
-#         S3Key: lambda/summary_generator.zip
-#       Runtime: python3.9
-#       Timeout: 300
-#       MemorySize: 512
-#       Environment:
-#         Variables:
-#           RESULTS_BUCKET: !Ref ResultsBucket
-#           ANALYSIS_TABLE: !Ref AnalysisResultsTable
+  SummaryGeneratorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: summary_generator.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      CodeUri: ./src/summarygenerator
+      Runtime: python3.9
+      Timeout: 300
+      MemorySize: 512
+      Environment:
+        Variables:
+          RESULTS_BUCKET: !Ref ResultsBucket
+          ANALYSIS_TABLE: !Ref AnalysisResultsTable
+  SummaryGeneratorFunctionLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${SummaryGeneratorFunction}"
+      RetentionInDays: 30
 
-#   InconsistencyDetectorFunction:
-#     Type: AWS::Lambda::Function
-#     Properties:
-#       FunctionName: !Sub "${ProjectName}-inconsistency-detector"
-#       Handler: inconsistency_detector.handler
-#       Role: !GetAtt LambdaExecutionRole.Arn
-#       Code:
-#         S3Bucket: !Ref ResultsBucket
-#         S3Key: lambda/inconsistency_detector.zip
-#       Runtime: python3.9
-#       Timeout: 300
-#       MemorySize: 512
-#       Environment:
-#         Variables:
-#           RESULTS_BUCKET: !Ref ResultsBucket
-#           TRANSCRIPTION_TABLE: !Ref TranscriptionTable
-#           ANALYSIS_TABLE: !Ref AnalysisResultsTable
+  InconsistencyDetectorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: main.handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      CodeUri: ./src/inconsistencydetector
+      Runtime: python3.9
+      Timeout: 300
+      MemorySize: 512
+      Environment:
+        Variables:
+          RESULTS_BUCKET: !Ref ResultsBucket
+          TRANSCRIPTION_TABLE: !Ref TranscriptionTable
+          ANALYSIS_TABLE: !Ref AnalysisResultsTable
+  InconsistencyDetectorFunctionLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${InconsistencyDetectorFunction}"
+      RetentionInDays: 30
 
   # EventBridge Rule
   AudioUploadRule:
@@ -314,26 +323,26 @@ Resources:
           TranscribeAudio:
             Type: Task
             Resource: !GetAtt TranscriptionFunction.Arn
-#             Next: Parallel
-#           Parallel:
-#             Type: Parallel
-#             Branches:
-#               - StartAt: AnalyzeSentiment
-#                 States:
-#                   AnalyzeSentiment:
-#                     Type: Task
-#                     Resource: !GetAtt SentimentAnalysisFunction.Arn
-#                     End: true
-#               - StartAt: GenerateSummary
-#                 States:
-#                   GenerateSummary:
-#                     Type: Task
-#                     Resource: !GetAtt SummaryGeneratorFunction.Arn
-#                     End: true
-#             Next: DetectInconsistencies
-#           DetectInconsistencies:
-#             Type: Task
-#             Resource: !GetAtt InconsistencyDetectorFunction.Arn
+            Next: Parallel
+          Parallel:
+            Type: Parallel
+            Branches:
+              - StartAt: AnalyzeSentiment
+                States:
+                  AnalyzeSentiment:
+                    Type: Task
+                    Resource: !GetAtt SentimentAnalysisFunction.Arn
+                    End: true
+              - StartAt: GenerateSummary
+                States:
+                  GenerateSummary:
+                    Type: Task
+                    Resource: !GetAtt SummaryGeneratorFunction.Arn
+                    End: true
+            Next: DetectInconsistencies
+          DetectInconsistencies:
+            Type: Task
+            Resource: !GetAtt InconsistencyDetectorFunction.Arn
             End: true
 
 Outputs:
